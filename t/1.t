@@ -1,6 +1,6 @@
 use strict;
 use warnings;
-use Test::More tests => 34 ;
+use Test::More tests => 37 ;
 
 BEGIN {use_ok("Hash::Type");}
 
@@ -111,21 +111,18 @@ my $byAge = $personType->cmp("birth : -num, lastname, firstname");
 
 isa_ok($byAge, 'CODE', "byAge");
 
-my @p1 = sort $byAge @people;
+ok(eq_array([map {$_->{birth}} sort $byAge @people],
+	    [1770, 1750, 1685, 1567]), "sort byAge");
 
-$, = "\t";
-$\ = "\n";
-
-print "By age";
-print values %$_ foreach @p1;
 
 my $byNameLength = $personType->cmp(lastname => sub {length($b) <=> length($a)},
 	                            lastname => 'alpha', 
                                     firstname => 'alpha');
+isa_ok($byAge, 'CODE', "byNameLength");
 
-
-print "By NameLength";
-print values %$_ foreach sort $byNameLength @people;
+ok(eq_array([map {$_->{lastname}} sort $byNameLength @people],
+	    ["van beethoven", "monteverdi", "mozart", "bach"]), 
+   "sort byNameLength");
 
 
 
@@ -142,8 +139,7 @@ ok($@, "delete forbidden on tied hash : $@");
 
 ok(delete $personType->{city}, "delete OK on $personType");
 
-eval {my $foo = $jsb->{city}; };
-ok($@, "city field was really deleted  : $@");
+ok((not exists $jsb->{city}), "city field was really deleted");
 
 delete tied(%$jsb)->[$personType->{firstname}];
 is($jsb->{firstname}, undef, "jsb lost his name");

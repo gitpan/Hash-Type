@@ -1,9 +1,10 @@
 package Hash::Type;
 
 use strict;
-use warnings FATAL => 'all' ;	# so that wrong keys in hash generate errors
+use warnings;
 use Carp;
-our $VERSION = "1.00";
+
+our $VERSION = "1.05";
 
 =head1 NAME
 
@@ -49,6 +50,10 @@ Hash::Type - pseudo-hashes as arrays tied to a "type" (list of fields)
   showPerson($_) foreach (sort $byAge @people);
   showPerson($_) foreach (sort $byNameLength @people);
 
+  # special comparisons : dates
+  my $US_DateCmp        = $myHashType->cmp("someDateField : m/d/y");
+  my $FR_InverseDateCmp = $myHashType->cmp("someDateField : -d.m.y");
+
 =head1 DESCRIPTION
 
 A Hash::Type is a collection of field names.
@@ -71,7 +76,7 @@ are implemented internally as arrays (so they use less memory)
 =item * 
 
 can be sorted efficiently through comparison functions generated
-by the class
+and compiled by the class
 
 =back
 
@@ -140,8 +145,14 @@ sub new {
 # tied hash implementation
 
 sub TIEHASH  { CORE::bless [@_] }
-sub STORE    { $_[0]->[$_[0]->[0]{$_[1]}] = $_[2] }
-sub FETCH    { $_[1] eq 'Hash::Type' ? $_[0]->[0] : $_[0]->[$_[0]->[0]{$_[1]}] }
+sub STORE    { my $ix = $_[0]->[0]{$_[1]} or 
+		 croak "can't STORE, key '$_[1]' was never added to this Hash::Type";
+	       $_[0]->[$ix] = $_[2]; }
+
+sub FETCH    { return $_[0]->[0] if $_[1] eq 'Hash::Type';
+	       my $ix = $_[0]->[0]{$_[1]} or return undef;
+	       return $_[0]->[$ix]; }
+
 sub FIRSTKEY { my $a = scalar keys %{$_[0]->[0]}; each %{$_[0]->[0]} }
 sub NEXTKEY  { each %{$_[0]->[0]} }
 sub EXISTS   { exists $_[0]->[0]{$_[1]} }
@@ -157,13 +168,13 @@ Does nothing for names that were already present.
 Returns the number of names actually added.
 
 You can also dynamically remove names by writing
-C<delete $myType->{name}> ; however, this merely
+C<delete $myType-E<gt>{name}> ; however, this merely
 masks access to {name} for all hashes tied to $myType, 
 so the values are still present in the underlying arrays and 
 you will not gain any memory by doing this.
 
 After deleting C<{name}>, you can again call 
-C<$myType->add('name')>, but this will allocate a new index, 
+C<$myType-E<gt>add('name')>, but this will allocate a new index, 
 and not recover the previous one allocated to that key.
 
 
@@ -202,11 +213,14 @@ and returns a positive, negative or zero value.
 This sub can then be fed to C<sort>. 'f1', 'f2', etc are field names,
 'cmp1', 'cmp2' are comparison operators written as :
 
-  [+|-] [alpha|num|cmp|<=>]
+  [+|-] [alpha|num|cmp|<=>|d.m.y|d/m/y|y-m-d|...]
 
 The sign is '+' for ascending order, '-' for descending; default is '+'.
-'alpha' is synonym to 'cmp' and 'num' is synonym to '<=>';
-default is 'alpha'. If all you want is alphabetic ascending order, 
+Operator 'alpha' is synonym to 'cmp' and 'num' is synonym to '<=>';
+operators 'd.m.y', 'd/m/y', etc. are for dates in various
+formats; default is 'alpha'. 
+
+If all you want is alphabetic ascending order, 
 just write the field names :
 
   $cmp = $personType->cmp('lastname', 'firstname');
@@ -219,6 +233,13 @@ so you I<have to> store it in a variable first :
 
   my $cmp = $personType->cmp('lastname', 'firstname');
   sort $cmp @people;
+
+For date comparisons, values are parsed into day/month/year, according
+to the shape specified (for example 'd.m.y') will take '.' as
+a separator. Day, month or year need not be several digits, 
+so '1.1.1' will be interpreted as '01.01.2001'. Years of 2 or 1 digits 
+are mapped to 2000 or 1900, with pivot at 33 (so 32 becomes 2032 and
+33 becomes 1933).
 
 =item C<$cmp = $myType-E<gt>cmp(f1 =E<gt> cmp1, f2 =E<gt> cmp2, ...)>
 
@@ -236,6 +257,8 @@ special variables C<$a> and <$b>. Since those
 are different in each package, you cannot
 pass the comparison function to another 
 package : the call to C<sort> has to be done here.
+
+
 
 =back 
 
@@ -262,6 +285,7 @@ sub cmp {
   my @callerSub;  # references to comparison subs given by caller
                   # (must copy them from @_ into a lexical in order to 
                   #  build a proper closure)
+  my $regex;      # used only for date comparisons, see below
 
   for (my $i = 0; $i < @_; $i += 2) {
     my $ix = $self->{$_[$i]} or croak "can't do cmp on absent field : $_[$i]";
@@ -271,19 +295,51 @@ sub cmp {
       push @cmp, "do {local ($a, $b) = (tied(%$a)->[$ix], tied(%$b)->[$ix]);".
 	             "&{\$callerSub[$#callerSub]}}";
     }
-    else { # builtin cmp operator
+    else { # builtin comparison operator
       my ($sign, $op) = ("", "cmp");
-      not defined $_[$i+1] or 
-	($sign, $op) = ($_[$i+1] =~ /^\s*([+-]?)\s*(alpha|num|cmp|<=>)\s*$/) or
-	croak "bad operator for cmp : $_[$i+1]";
-      $op = 'cmp' if $op eq 'alpha';
-      $op = '<=>' if $op eq 'num';
-      push @cmp, "$sign(tied(%$a)->[$ix] $op tied(%$b)->[$ix])";
+      my $str;
+      if (defined $_[$i+1]) {
+	($sign, $op) = ($_[$i+1] =~ /^\s*([-+]?)\s*(.+)/);
       }
-  } 
+
+      for ($op) {
+	/^(alpha|cmp)\s*$/   and do {$str = "%s cmp %s"; last};
+	/^(num|<=>)\s*$/     and do {$str = "%s <=> %s"; last};
+	/^d(\W+)m(\W+)y\s*$/ and do {$regex=qr{^(\d+)\Q$1\E(\d+)\Q$2\E(\d+)$};
+				     $str = "_dateCmp(\$regex, 0, 1, 2, %s, %s)";
+				     last};
+	/^m(\W+)d(\W+)y\s*$/ and do {$regex=qr{^(\d+)\Q$1\E(\d+)\Q$2\E(\d+)$};
+				     $str = "_dateCmp(\$regex, 1, 0, 2, %s, %s)";
+				     last};
+	/^y(\W+)m(\W+)d\s*$/ and do {$regex=qr{^(\d+)\Q$1\E(\d+)\Q$2\E(\d+)$};
+				     $str = "_dateCmp(\$regex, 2, 1, 0, %s, %s)";
+				     last};
+	croak "bad operator for Hash::Type::cmp : $_[$i+1]";
+      }
+      $str = sprintf("$sign($str)", "tied(%$a)->[$ix]", "tied(%$b)->[$ix]");
+      push @cmp, $str;
+    }
+  }
+
   return  eval "sub {" . join(" || ", @cmp) . "}" or croak $@;
 }
 
+
+sub _dateCmp {
+  my ($regex, $d, $m, $y, $date1, $date2) = @_;
+
+  return 0 if not $date1 and not $date2;
+  return 1 if not $date1;	# null date treated as bigger than any other
+  return -1 if not $date2;
+
+  my @d1 = ($date1 =~ $regex) or croak "invalid date '$date1' for regex $regex";
+  my @d2 = ($date2 =~ $regex) or croak "invalid date '$date2' for regex $regex";
+
+  $d1[$y] += ($d1[$y] < 33) ? 2000 : 1900 if $d1[$y] < 100;
+  $d2[$y] += ($d2[$y] < 33) ? 2000 : 1900 if $d2[$y] < 100;
+
+  return ($d1[$y]<=>$d2[$y]) || ($d1[$m]<=>$d2[$m]) || ($d1[$d]<=>$d2[$d]);
+}
 
 
 =head1 CAVEATS
@@ -318,13 +374,16 @@ C<fieldsort> does everything at once (splitting, comparing
 and sorting), whereas C<Hash::Type::cmp> only compares, and
 leaves it to the caller to do the rest.
 
+C<Hash::Type> was primarily designed as a core element
+for implementing rows of data in L<File::Tabular>.
+
 =head1 AUTHOR
 
 Laurent Dami, E<lt>laurent.dami AT etat  geneve  chE<gt>
 
 =head1 COPYRIGHT AND LICENSE
 
-Copyright 2004 by Laurent Dami.
+Copyright 2005 by Laurent Dami.
 
 This library is free software; you can redistribute it and/or modify
 it under the same terms as Perl itself. 
