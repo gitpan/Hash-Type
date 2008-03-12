@@ -4,7 +4,7 @@ use strict;
 use warnings;
 use Carp;
 
-our $VERSION = "1.05";
+our $VERSION = "1.08";
 
 =head1 NAME
 
@@ -111,8 +111,6 @@ Access to C<$h{name}> is equivalent to writing
 
   tied(%h)->[$myType->{name}]
 
-so this will generate an error if C<name> was not declared in C<$myType>.
-
 C<$h{'Hash::Type'}> is a special, predefined name that  gives back the object
 to which this hash is tied (you may need it for example to generate a 
 comparison function, see below).
@@ -149,9 +147,16 @@ sub STORE    { my $ix = $_[0]->[0]{$_[1]} or
 		 croak "can't STORE, key '$_[1]' was never added to this Hash::Type";
 	       $_[0]->[$ix] = $_[2]; }
 
-sub FETCH    { return $_[0]->[0] if $_[1] eq 'Hash::Type';
-	       my $ix = $_[0]->[0]{$_[1]} or return undef;
-	       return $_[0]->[$ix]; }
+# FETCH : must be an lvalue because may be used in $h{field} =~ s/.../../;
+# And since lvalues cannot use "return" (cf. L<perlsub>), we
+# must write intricate ternary ifs -- not nice to read !
+
+sub FETCH : lvalue { 
+  my $ix = $_[0]->[0]{$_[1]};
+  $_[1] eq 'Hash::Type' ? $_[0]->[0] 
+                        : $ix ? $_[0]->[$ix]
+                              : undef;
+}
 
 sub FIRSTKEY { my $a = scalar keys %{$_[0]->[0]}; each %{$_[0]->[0]} }
 sub NEXTKEY  { each %{$_[0]->[0]} }
@@ -305,13 +310,13 @@ sub cmp {
       for ($op) {
 	/^(alpha|cmp)\s*$/   and do {$str = "%s cmp %s"; last};
 	/^(num|<=>)\s*$/     and do {$str = "%s <=> %s"; last};
-	/^d(\W+)m(\W+)y\s*$/ and do {$regex=qr{^(\d+)\Q$1\E(\d+)\Q$2\E(\d+)$};
+	/^d(\W+)m(\W+)y\s*$/ and do {$regex=qr{(\d+)\Q$1\E(\d+)\Q$2\E(\d+)};
 				     $str = "_dateCmp(\$regex, 0, 1, 2, %s, %s)";
 				     last};
-	/^m(\W+)d(\W+)y\s*$/ and do {$regex=qr{^(\d+)\Q$1\E(\d+)\Q$2\E(\d+)$};
+	/^m(\W+)d(\W+)y\s*$/ and do {$regex=qr{(\d+)\Q$1\E(\d+)\Q$2\E(\d+)};
 				     $str = "_dateCmp(\$regex, 1, 0, 2, %s, %s)";
 				     last};
-	/^y(\W+)m(\W+)d\s*$/ and do {$regex=qr{^(\d+)\Q$1\E(\d+)\Q$2\E(\d+)$};
+	/^y(\W+)m(\W+)d\s*$/ and do {$regex=qr{(\d+)\Q$1\E(\d+)\Q$2\E(\d+)};
 				     $str = "_dateCmp(\$regex, 2, 1, 0, %s, %s)";
 				     last};
 	croak "bad operator for Hash::Type::cmp : $_[$i+1]";
@@ -331,6 +336,11 @@ sub _dateCmp {
   return 0 if not $date1 and not $date2;
   return 1 if not $date1;	# null date treated as bigger than any other
   return -1 if not $date2;
+
+  for my $date ($date1, $date2) {
+    $date =~ s[<.*?>][]g; # remove any markup
+    $date =~ tr/{}[]()//d;  # remove any {}[]() chars
+  }; 
 
   my @d1 = ($date1 =~ $regex) or croak "invalid date '$date1' for regex $regex";
   my @d2 = ($date2 =~ $regex) or croak "invalid date '$date2' for regex $regex";
