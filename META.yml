@@ -1,13 +1,21 @@
---- #YAML:1.0
-name:                Hash-Type
-version:             1.08
-abstract:            pseudo-hashes as arrays tied to a "type" (list of fields)
-license:             ~
-generated_by:        ExtUtils::MakeMaker version 6.3201
-distribution_type:   module
-requires:     
-meta-spec:
-    url:     http://module-build.sourceforge.net/META-spec-v1.2.html
-    version: 1.2
+---
+abstract: "pseudo-hashes as arrays tied to a \"type\" (list of fields)"
 author:
-    - Laurent Dami <laurent.dami@etat.ge.ch>
+  - 'Laurent Dami <laurent.dami@etat.ge.ch>'
+build_requires:
+  ExtUtils::MakeMaker: 0
+configure_requires:
+  ExtUtils::MakeMaker: 0
+dynamic_config: 1
+generated_by: 'ExtUtils::MakeMaker version 6.64, CPAN::Meta::Converter version 2.120921'
+license: unknown
+meta-spec:
+  url: http://module-build.sourceforge.net/META-spec-v1.4.html
+  version: 1.4
+name: Hash-Type
+no_index:
+  directory:
+    - t
+    - inc
+requires: {}
+version: 1.09
